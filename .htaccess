@@ -1,0 +1,8 @@
+# Apache (XAMPP) rules: no directory listings, and keep private files private.
+Options -Indexes
+
+<FilesMatch "(\.(sql|bat|md|txt)|^router\.php)$">
+    Require all denied
+</FilesMatch>
+
+RedirectMatch 404 /\.

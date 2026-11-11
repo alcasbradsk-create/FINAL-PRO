@@ -1,0 +1,2 @@
+# PHP includes and settings are never served directly.
+Require all denied

@@ -1,54 +1,189 @@
 <?php
+// Faculty Management: list of all faculty records with View, Edit and Delete.
 require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/config/db.php';
 
-$message = isset($_GET['success']) ? 'Faculty record saved successfully.' : '';
+const PER_PAGE = 20;
+
+$search = trim((string) ($_GET['q'] ?? ''));
+$page = max(1, (int) ($_GET['page'] ?? 1));
+
+/** Link back to this list, keeping the current search and page. */
+function list_url(array $changes = []): string
+{
+    global $search, $page;
+    $query = array_filter(array_merge(['q' => $search, 'page' => $page > 1 ? $page : null], $changes),
+        fn($value) => $value !== null && $value !== '');
+    return 'faculty.php' . ($query ? '?' . http_build_query($query) : '');
+}
+
+$messages = [
+    'added'    => 'Faculty record added successfully.',
+    'updated'  => 'Faculty record updated successfully.',
+    'deleted'  => 'Faculty record deleted successfully.',
+    'notfound' => 'Faculty record was not found.',
+];
+$message = $messages[$_GET['msg'] ?? ''] ?? '';
 $error = '';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
     $facultyId = filter_var($_POST['faculty_id'] ?? null, FILTER_VALIDATE_INT);
-    if (!$facultyId) {
+    if (!csrf_valid()) {
+        $error = 'Your session expired. Please try again.';
+    } elseif (!$facultyId) {
         $error = 'Invalid faculty record.';
     } else {
         try {
             $stmt = $pdo->prepare('DELETE FROM faculty WHERE id = :id');
             $stmt->execute([':id' => $facultyId]);
-            $message = $stmt->rowCount() ? 'Faculty record deleted successfully.' : 'Faculty record was not found.';
+            redirect(list_url(['msg' => $stmt->rowCount() ? 'deleted' : 'notfound']));
         } catch (PDOException $e) {
+            error_log('[faculty-system] faculty delete failed: ' . $e->getMessage());
             $error = 'Unable to delete the faculty record.';
         }
     }
 }
 
+$faculty = [];
+$total = 0;
+$pages = 1;
 try {
-    $stmt = $pdo->query('SELECT * FROM faculty ORDER BY lastname, firstname');
+    $where = '';
+    $params = [];
+    if ($search !== '') {
+        $like = '%' . addcslashes($search, '%_\\') . '%';
+        $searchable = ["CONCAT_WS(' ', firstname, middlename, lastname)", 'department', 'position', 'specialization', 'email'];
+        $conditions = [];
+        foreach ($searchable as $i => $column) {
+            $conditions[] = "$column LIKE :q$i";
+            $params[":q$i"] = $like;
+        }
+        $where = 'WHERE ' . implode(' OR ', $conditions);
+    }
+
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM faculty $where");
+    $stmt->execute($params);
+    $total = (int) $stmt->fetchColumn();
+    $pages = max(1, (int) ceil($total / PER_PAGE));
+    $page = min($page, $pages);
+
+    $stmt = $pdo->prepare("SELECT id, firstname, middlename, lastname, gender, email, status, department, position
+        FROM faculty $where ORDER BY id LIMIT :limit OFFSET :offset");
+    foreach ($params as $name => $value) {
+        $stmt->bindValue($name, $value);
+    }
+    $stmt->bindValue(':limit', PER_PAGE, PDO::PARAM_INT);
+    $stmt->bindValue(':offset', ($page - 1) * PER_PAGE, PDO::PARAM_INT);
+    $stmt->execute();
     $faculty = $stmt->fetchAll();
 } catch (PDOException $e) {
-    $faculty = [];
-    $error = 'Unable to load faculty records. Please check the database connection.';
+    error_log('[faculty-system] faculty list failed: ' . $e->getMessage());
+    $error = 'Unable to load faculty records. Please try again later.';
 }
 
 $pageTitle = 'Faculty Management';
+$layout = 'app';
 require_once __DIR__ . '/includes/header.php';
+$firstShown = $total ? ($page - 1) * PER_PAGE + 1 : 0;
+$lastShown = min($page * PER_PAGE, $total);
 ?>
-<main class="page-shell">
-    <div class="container">
-        <div class="page-heading">
-            <div><span class="eyebrow text-primary">Records</span><h1 class="h2 mb-1">Faculty Management</h1><p class="text-muted mb-0">Manage faculty information stored in the database.</p></div>
-            <a href="faculty_form.php" class="btn btn-primary-custom" style="width:auto"><i class="bi bi-person-plus me-1"></i> Add Faculty</a>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-header__title">Faculty Management</h1>
+        <p class="page-header__lead">Manage faculty information stored in the database.</p>
+    </div>
+    <div class="page-header__actions">
+        <a href="faculty_form.php" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Add Faculty</a>
+    </div>
+</div>
+
+<?php if ($message): ?><div class="alert alert-success" role="status"><i class="bi bi-check-circle"></i><div><?= htmlspecialchars($message) ?></div></div><?php endif; ?>
+<?php if ($error): ?><div class="alert alert-danger" role="alert"><i class="bi bi-exclamation-circle"></i><div><?= htmlspecialchars($error) ?></div></div><?php endif; ?>
+
+<section class="card-x">
+    <form method="get" action="faculty.php" class="toolbar" role="search">
+        <div class="input-icon toolbar__search" id="search">
+            <i class="bi bi-search"></i>
+            <input type="search" class="form-control" name="q" value="<?= htmlspecialchars($search) ?>" placeholder="Search faculty" aria-label="Search faculty">
         </div>
-        <?php if ($message): ?><div class="alert alert-success"><i class="bi bi-check-circle me-2"></i><?= htmlspecialchars($message) ?></div><?php endif; ?>
-        <?php if ($error): ?><div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-2"></i><?= htmlspecialchars($error) ?></div><?php endif; ?>
-        <div class="table-card">
-            <?php if (!$faculty): ?>
-                <div class="text-center p-5"><i class="bi bi-people fs-1 text-muted"></i><h2 class="h5 mt-3">No faculty records yet</h2><p class="text-muted">Add the first faculty member to begin.</p><a href="faculty_form.php" class="btn btn-primary">Add Faculty</a></div>
-            <?php else: ?>
-                <div class="table-responsive"><table class="table table-hover align-middle"><thead class="table-light"><tr><th>ID</th><th>Name</th><th>Status</th><th>Employment</th><th>Department</th><th>Position</th><th class="text-end">Actions</th></tr></thead><tbody>
-                <?php foreach ($faculty as $member): ?><tr>
-                    <td>#<?= (int) $member['id'] ?></td><td class="fw-semibold"><?= htmlspecialchars(trim($member['firstname'] . ' ' . ($member['middlename'] ?? '') . ' ' . $member['lastname'])) ?></td><td><?= htmlspecialchars($member['status']) ?></td><td><?= htmlspecialchars($member['employment_status']) ?></td><td><?= htmlspecialchars($member['department']) ?></td><td><?= htmlspecialchars($member['position']) ?></td>
-                    <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-primary" href="faculty_view.php?id=<?= (int) $member['id'] ?>" title="View"><i class="bi bi-eye"></i></a> <a class="btn btn-sm btn-outline-secondary" href="faculty_form.php?id=<?= (int) $member['id'] ?>" title="Edit"><i class="bi bi-pencil"></i></a> <form class="d-inline" method="post" onsubmit="return confirm('Are you sure you want to delete this faculty record?');"><input type="hidden" name="action" value="delete"><input type="hidden" name="faculty_id" value="<?= (int) $member['id'] ?>"><button class="btn btn-sm btn-outline-danger" title="Delete"><i class="bi bi-trash"></i></button></form></td>
-                </tr><?php endforeach; ?></tbody></table></div>
+        <button class="btn btn-secondary">Search</button>
+        <?php if ($search !== ''): ?><a href="faculty.php" class="btn btn-ghost">Clear</a><?php endif; ?>
+        <span class="toolbar__meta tabular"><?= $total ?> record<?= $total === 1 ? '' : 's' ?></span>
+    </form>
+
+    <?php if (!$faculty): ?>
+        <?php if ($search !== ''): ?>
+            <div class="empty">
+                <span class="empty__icon"><i class="bi bi-search"></i></span>
+                <h2 class="empty__title">No matching faculty records</h2>
+                <p class="empty__text">Nothing matches “<?= htmlspecialchars($search) ?>”. Check the spelling or try a department name.</p>
+                <a href="faculty.php" class="btn btn-secondary">Clear search</a>
+            </div>
+        <?php else: ?>
+            <div class="empty">
+                <span class="empty__icon"><i class="bi bi-person-plus"></i></span>
+                <h2 class="empty__title">No faculty records yet</h2>
+                <p class="empty__text">Add the first faculty member to begin the registry.</p>
+                <a href="faculty_form.php" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Add Faculty</a>
+            </div>
+        <?php endif; ?>
+    <?php else: ?>
+        <div class="table-responsive">
+            <table class="table-x">
+                <thead>
+                    <tr>
+                        <th scope="col">ID</th>
+                        <th scope="col">Full Name</th>
+                        <th scope="col">Sex</th>
+                        <th scope="col">Email</th>
+                        <th scope="col">Department</th>
+                        <th scope="col">Position</th>
+                        <th scope="col" class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($faculty as $member): ?>
+                    <tr>
+                        <td class="tabular text-muted"><?= (int) $member['id'] ?></td>
+                        <td>
+                            <div class="person">
+                                <?= avatar($member) ?>
+                                <div class="min-w-0">
+                                    <a class="person__name" href="faculty_view.php?id=<?= (int) $member['id'] ?>"><?= htmlspecialchars(full_name($member)) ?></a>
+                                    <div class="person__meta"><?= status_badge($member['status']) ?></div>
+                                </div>
+                            </div>
+                        </td>
+                        <td><?= htmlspecialchars($member['gender']) ?></td>
+                        <td><?= htmlspecialchars($member['email']) ?></td>
+                        <td><?= htmlspecialchars($member['department']) ?></td>
+                        <td><?= htmlspecialchars($member['position']) ?></td>
+                        <td>
+                            <div class="row-actions">
+                                <a class="btn btn-sm btn-secondary" href="faculty_view.php?id=<?= (int) $member['id'] ?>"><i class="bi bi-eye"></i> View</a>
+                                <a class="btn btn-sm btn-secondary" href="faculty_form.php?id=<?= (int) $member['id'] ?>"><i class="bi bi-pencil"></i> Edit</a>
+                                <button type="button" class="btn btn-sm btn-secondary text-danger" data-bs-toggle="modal" data-bs-target="#deleteModal" data-id="<?= (int) $member['id'] ?>" data-name="<?= htmlspecialchars(full_name($member)) ?>" ><i class="bi bi-trash3"></i> Delete</button>
+                            </div>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="pager">
+            <span class="tabular">Showing <?= $firstShown ?>–<?= $lastShown ?> of <?= $total ?></span>
+            <?php if ($pages > 1): ?>
+                <nav class="pager__pages" aria-label="Faculty pages">
+                    <a class="pager__link <?= $page <= 1 ? 'is-disabled' : '' ?>" href="<?= htmlspecialchars(list_url(['page' => $page - 1])) ?>" aria-label="Previous page"><i class="bi bi-chevron-left"></i></a>
+                    <?php for ($p = 1; $p <= $pages; $p++): ?>
+                        <a class="pager__link <?= $p === $page ? 'is-current' : '' ?>" href="<?= htmlspecialchars(list_url(['page' => $p])) ?>" <?= $p === $page ? 'aria-current="page"' : '' ?>><?= $p ?></a>
+                    <?php endfor; ?>
+                    <a class="pager__link <?= $page >= $pages ? 'is-disabled' : '' ?>" href="<?= htmlspecialchars(list_url(['page' => $page + 1])) ?>" aria-label="Next page"><i class="bi bi-chevron-right"></i></a>
+                </nav>
             <?php endif; ?>
         </div>
-    </div>
-</main>
-<?php require_once __DIR__ . '/includes/footer.php'; ?>
+    <?php endif; ?>
+</section>
+
+<?php $deleteAction = list_url(); require_once __DIR__ . '/includes/footer.php'; ?>

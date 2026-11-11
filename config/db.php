@@ -1,101 +1,62 @@
 <?php
-$host     = 'localhost';
-$db_name  = 'users_db';
-$username = 'root';
-$password = '';
+/**
+ * Database connection (included by every page that uses the database).
+ *
+ * Settings come from the environment variables DB_HOST, DB_PORT, DB_NAME,
+ * DB_USER and DB_PASS; the defaults match a stock local XAMPP install.
+ *
+ * If the database does not exist yet, it is created with the tables from
+ * database.sql (without the sample records). Import database.sql yourself to
+ * get the sample records and the default test account.
+ */
+
+$dbHost = getenv('DB_HOST') ?: 'localhost';
+$dbPort = (int) (getenv('DB_PORT') ?: 3306);
+$dbName = getenv('DB_NAME') ?: 'users_db';
+$dbUser = getenv('DB_USER') ?: 'root';
+$dbPass = getenv('DB_PASS') !== false ? getenv('DB_PASS') : '';
+
+$dbOptions = [
+    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    PDO::ATTR_EMULATE_PREPARES   => false,
+];
+
+/** Log the real error for the developer and show visitors a friendly page. */
+function db_fail(string $context, Throwable $e): never
+{
+    error_log("[faculty-system] database {$context} failed: " . $e->getMessage());
+    http_response_code(503);
+    exit('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Database unavailable</title></head>'
+        . '<body style="font-family:system-ui,sans-serif;max-width:560px;margin:4rem auto;padding:0 1rem">'
+        . '<h1>Database unavailable</h1><p>The system cannot connect to the database. '
+        . 'Make sure MySQL is running in the XAMPP Control Panel, then reload this page.</p></body></html>');
+}
 
 try {
-    $dsn = "mysql:host={$host};dbname={$db_name};charset=utf8mb4";
-    
-    $options = [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES   => false,
-    ];
-    
-    $pdo = new PDO($dsn, $username, $password, $options);
-
+    $pdo = new PDO("mysql:host={$dbHost};port={$dbPort};dbname={$dbName};charset=utf8mb4", $dbUser, $dbPass, $dbOptions);
 } catch (PDOException $e) {
+    // Error 1049 = unknown database: create it on first run. Anything else is a real failure.
+    if ((int) $e->getCode() !== 1049) {
+        db_fail('connection', $e);
+    }
     try {
-        $temp_pdo = new PDO("mysql:host={$host};charset=utf8mb4", $username, $password);
-        $temp_pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $temp_pdo->exec("CREATE DATABASE IF NOT EXISTS `{$db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
-        $temp_pdo->exec("USE `{$db_name}`;");
-        $temp_pdo->exec("CREATE TABLE IF NOT EXISTS `users` (
-            `id` INT(11) AUTO_INCREMENT PRIMARY KEY,
-            `firstname` VARCHAR(100) NOT NULL,
-            `middlename` VARCHAR(100) DEFAULT NULL,
-            `lastname` VARCHAR(100) NOT NULL,
-            `username` VARCHAR(100) NOT NULL UNIQUE,
-            `email` VARCHAR(150) NOT NULL UNIQUE,
-            `password` VARCHAR(255) NOT NULL,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
-        
-        $pdo = new PDO("mysql:host={$host};dbname={$db_name};charset=utf8mb4", $username, $password, [
-            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES   => false,
-        ]);
-    } catch (PDOException $ex) {
-        die("<strong>Database Connection Failed:</strong> " . htmlspecialchars($ex->getMessage()));
-    }
-}
+        $safeName = str_replace('`', '', $dbName);
+        $pdo = new PDO("mysql:host={$dbHost};port={$dbPort};charset=utf8mb4", $dbUser, $dbPass, $dbOptions);
+        $pdo->exec("CREATE DATABASE IF NOT EXISTS `{$safeName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        $pdo->exec("USE `{$safeName}`");
 
-// Create the faculty table and migrate the first version of the module when needed.
-try {
-    $userColumns = [];
-    foreach ($pdo->query('SHOW COLUMNS FROM users')->fetchAll() as $column) $userColumns[$column['Field']] = true;
-    if (isset($userColumns['uid']) && !isset($userColumns['id'])) {
-        $pdo->exec('ALTER TABLE users CHANGE `uid` `id` INT(11) NOT NULL AUTO_INCREMENT');
-        $userColumns['id'] = true;
-    }
-    if (!isset($userColumns['middlename'])) $pdo->exec("ALTER TABLE users ADD `middlename` VARCHAR(100) DEFAULT NULL AFTER `firstname`");
-
-    $pdo->exec("CREATE TABLE IF NOT EXISTS `faculty` (
-        `id` INT(11) AUTO_INCREMENT PRIMARY KEY,
-        `firstname` VARCHAR(100) NOT NULL,
-        `middlename` VARCHAR(100) DEFAULT NULL,
-        `lastname` VARCHAR(100) NOT NULL,
-        `status` VARCHAR(50) NOT NULL DEFAULT 'Active',
-        `department` VARCHAR(100) NOT NULL,
-        `position` VARCHAR(100) NOT NULL,
-        `contact_num` VARCHAR(30) NOT NULL,
-        `gender` VARCHAR(20) NOT NULL,
-        `email` VARCHAR(100) NOT NULL,
-        `employment_status` VARCHAR(50) NOT NULL DEFAULT 'Permanent',
-        `specialization` VARCHAR(150) NOT NULL,
-        `date_hired` DATE NOT NULL,
-        `birthday` DATE NOT NULL,
-        `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
-
-    $columns = [];
-    foreach ($pdo->query('SHOW COLUMNS FROM faculty')->fetchAll() as $column) {
-        $columns[$column['Field']] = true;
-    }
-    $renames = [
-        'faculty_id' => 'id', 'first_name' => 'firstname', 'middle_name' => 'middlename',
-        'last_name' => 'lastname', 'birthdate' => 'birthday', 'sex' => 'gender',
-        'contact_number' => 'contact_num'
-    ];
-    foreach ($renames as $old => $new) {
-        if (isset($columns[$old]) && !isset($columns[$new])) {
-            $type = $new === 'id' ? 'INT(11) NOT NULL AUTO_INCREMENT' : ($new === 'birthday' ? 'DATE NOT NULL' : ($new === 'middlename' ? 'VARCHAR(100) DEFAULT NULL' : 'VARCHAR(100) NOT NULL'));
-            $pdo->exec("ALTER TABLE faculty CHANGE `$old` `$new` $type");
-            $columns[$new] = true;
+        // Run only the CREATE TABLE statements from database.sql.
+        $sql = file_get_contents(__DIR__ . '/../database.sql');
+        foreach (preg_split('/;\s*\n/', $sql) as $statement) {
+            $statement = trim(preg_replace('/^\s*--.*$/m', '', $statement));
+            if (stripos($statement, 'CREATE TABLE') === 0) {
+                $pdo->exec($statement);
+            }
         }
+    } catch (PDOException $e) {
+        db_fail('creation', $e);
     }
-    $missing = [
-        'status' => "VARCHAR(50) NOT NULL DEFAULT 'Active'",
-        'employment_status' => "VARCHAR(50) NOT NULL DEFAULT 'Permanent'",
-        'specialization' => "VARCHAR(150) NOT NULL DEFAULT ''"
-    ];
-    foreach ($missing as $name => $definition) {
-        if (!isset($columns[$name])) $pdo->exec("ALTER TABLE faculty ADD `$name` $definition");
-    }
-} catch (PDOException $e) {
-    // The application will show the database error when a faculty operation is attempted.
 }
-?>
+
+unset($dbHost, $dbPort, $dbName, $dbUser, $dbPass, $dbOptions, $safeName, $sql, $statement);

@@ -3,12 +3,11 @@
  * Registration Page
  * Handles new user account registration with validation and password hashing.
  */
-session_start();
+require_once __DIR__ . '/includes/bootstrap.php';
 
 // If user is already logged in, redirect to dashboard
-if (isset($_SESSION['uid']) && !empty($_SESSION['uid'])) {
-    header("Location: dashboard.php");
-    exit();
+if (is_logged_in()) {
+    redirect('dashboard.php');
 }
 
 require_once __DIR__ . '/config/db.php';
@@ -24,21 +23,30 @@ $email     = '';
 
 // Process Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $firstname        = trim($_POST['firstname'] ?? '');
-    $middlename       = trim($_POST['middlename'] ?? '');
-    $lastname         = trim($_POST['lastname'] ?? '');
-    $username         = trim($_POST['username'] ?? '');
-    $email            = trim($_POST['email'] ?? '');
-    $password         = $_POST['password'] ?? '';
-    $confirm_password = $_POST['confirm_password'] ?? '';
+    $firstname        = trim((string) ($_POST['firstname'] ?? ''));
+    $middlename       = trim((string) ($_POST['middlename'] ?? ''));
+    $lastname         = trim((string) ($_POST['lastname'] ?? ''));
+    $username         = trim((string) ($_POST['username'] ?? ''));
+    $email            = trim((string) ($_POST['email'] ?? ''));
+    $password         = (string) ($_POST['password'] ?? '');
+    $confirm_password = (string) ($_POST['confirm_password'] ?? '');
 
-    // 1. Basic empty field validation
-    if (empty($firstname) || empty($middlename) || empty($lastname) || empty($username) || empty($email) || empty($password) || empty($confirm_password)) {
-        $errors[] = "All fields are required. Please fill in all details.";
+    if (!csrf_valid()) {
+        $errors[] = "Your session expired. Please submit the form again.";
     }
 
-    // 2. Validate email format
-    if (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    // 1. Basic empty field validation (middle name is optional)
+    if ($firstname === '' || $lastname === '' || $username === '' || $email === '' || $password === '' || $confirm_password === '') {
+        $errors[] = "Please fill in all required fields.";
+    }
+
+    // 2. Validate lengths and email format
+    foreach (['First name' => $firstname, 'Middle name' => $middlename, 'Last name' => $lastname] as $label => $value) {
+        if (mb_strlen($value) > 100) {
+            $errors[] = "{$label} must be 100 characters or fewer.";
+        }
+    }
+    if ($email !== '' && (mb_strlen($email) > 150 || !filter_var($email, FILTER_VALIDATE_EMAIL))) {
         $errors[] = "Please provide a valid email address.";
     }
 
@@ -48,9 +56,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // 4. Password validation
-    if (!empty($password)) {
-        if (strlen($password) < 6) {
-            $errors[] = "Password must be at least 6 characters long.";
+    if ($password !== '') {
+        if (mb_strlen($password) < PASSWORD_MIN_LENGTH) {
+            $errors[] = "Password must be at least " . PASSWORD_MIN_LENGTH . " characters long.";
+        }
+        if (strlen($password) > 72) {
+            $errors[] = "Password must be 72 bytes or fewer.";
         }
         if ($password !== $confirm_password) {
             $errors[] = "Passwords do not match.";
@@ -86,11 +97,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $insert_stmt->execute([
                     ':firstname' => $firstname,
-                    ':middlename' => $middlename,
+                    ':middlename' => $middlename === '' ? null : $middlename,
                     ':lastname'  => $lastname,
                     ':username'  => $username,
                     ':email'     => $email,
-                    ':password'  => $hashed_password
+                    ':password'  => $hashed_password,
                 ]);
 
                 $success_msg = "Account created successfully! You can now log in.";
@@ -98,128 +109,92 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $firstname = $middlename = $lastname = $username = $email = '';
             }
         } catch (PDOException $e) {
-            $errors[] = "A database error occurred: " . htmlspecialchars($e->getMessage());
+            error_log('[faculty-system] registration failed: ' . $e->getMessage());
+            $errors[] = "Registration is temporarily unavailable. Please try again later.";
         }
     }
 }
 
-$pageTitle = "Register";
+$pageTitle = "Create Account";
+$layout = 'auth';
 require_once __DIR__ . '/includes/header.php';
 ?>
 
-<div class="main-wrapper">
-    <div class="container">
-        <div class="row justify-content-center">
-            <div class="col-md-8 col-lg-6 col-xl-5">
-                
-                <div class="auth-card fade-in">
-                    <div class="auth-header">
-                        <i class="bi bi-person-plus-fill fs-1 text-warning mb-2 d-inline-block"></i>
-                        <h3>Create Account</h3>
-                        <p>Fill out the form below to register your account</p>
-                    </div>
+<div class="auth__panel is-wide">
+    <h1 class="auth__title">Create Account</h1>
+    <p class="auth__lead">Fill out the form below to register your account.</p>
 
-                    <div class="auth-body">
-                        <!-- Success Message Alert -->
-                        <?php if (!empty($success_msg)): ?>
-                            <div class="alert alert-success d-flex align-items-center mb-4" role="alert">
-                                <i class="bi bi-check-circle-fill me-2 fs-5"></i>
-                                <div>
-                                    <?= htmlspecialchars($success_msg) ?>
-                                    <div class="mt-2">
-                                        <a href="login.php" class="btn btn-sm btn-success fw-bold">Proceed to Login &rarr;</a>
-                                    </div>
-                                </div>
-                            </div>
-                        <?php endif; ?>
 
-                        <!-- Error Messages Alert -->
-                        <?php if (!empty($errors)): ?>
-                            <div class="alert alert-danger mb-4" role="alert">
-                                <div class="d-flex align-items-center mb-1">
-                                    <i class="bi bi-exclamation-triangle-fill me-2 fs-5"></i>
-                                    <strong>Registration failed:</strong>
-                                </div>
-                                <ul class="mb-0 ps-3 small">
-                                    <?php foreach ($errors as $error): ?>
-                                        <li><?= htmlspecialchars($error) ?></li>
-                                    <?php endforeach; ?>
-                                </ul>
-                            </div>
-                        <?php endif; ?>
 
-                        <!-- Registration Form -->
-                        <form action="register.php" method="POST" novalidate>
-                            <div class="row g-2 mb-3">
-                                <div class="col-sm-6">
-                                    <label for="firstname" class="form-label">First Name</label>
-                                    <div class="input-group">
-                                        <span class="input-group-text"><i class="bi bi-person"></i></span>
-                                        <input type="text" class="form-control" id="firstname" name="firstname" value="<?= htmlspecialchars($firstname) ?>" placeholder="e.g. Juan" required>
-                                    </div>
-                                </div>
-                                <div class="col-sm-6">
-                                    <label for="lastname" class="form-label">Last Name</label>
-                                    <div class="input-group">
-                                        <span class="input-group-text"><i class="bi bi-person"></i></span>
-                                        <input type="text" class="form-control" id="lastname" name="lastname" value="<?= htmlspecialchars($lastname) ?>" placeholder="e.g. Dela Cruz" required>
-                                    </div>
-                                </div>
-                                <div class="col-sm-6">
-                                    <label for="middlename" class="form-label">Middle Name</label>
-                                    <div class="input-group">
-                                        <span class="input-group-text"><i class="bi bi-person"></i></span>
-                                        <input type="text" class="form-control" id="middlename" name="middlename" value="<?= htmlspecialchars($middlename) ?>" placeholder="e.g. Santos" required>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="username" class="form-label">Username</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-at"></i></span>
-                                    <input type="text" class="form-control" id="username" name="username" value="<?= htmlspecialchars($username) ?>" placeholder="e.g. juandelacruz" required>
-                                </div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="email" class="form-label">Email Address</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-envelope"></i></span>
-                                    <input type="email" class="form-control" id="email" name="email" value="<?= htmlspecialchars($email) ?>" placeholder="e.g. juan@example.com" required>
-                                </div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="password" class="form-label">Password</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-key"></i></span>
-                                    <input type="password" class="form-control" id="password" name="password" placeholder="At least 6 characters" required>
-                                </div>
-                            </div>
-
-                            <div class="mb-4">
-                                <label for="confirm_password" class="form-label">Confirm Password</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-shield-check"></i></span>
-                                    <input type="password" class="form-control" id="confirm_password" name="confirm_password" placeholder="Re-type your password" required>
-                                </div>
-                            </div>
-
-                            <button type="submit" class="btn btn-primary-custom mb-3">
-                                <i class="bi bi-person-check me-1"></i> Register Account
-                            </button>
-
-                            <div class="text-center text-muted small">
-                                Already have an account? <a href="login.php" class="text-primary fw-semibold text-decoration-none">Log in here</a>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
+    <?php if (!empty($success_msg)): ?>
+        <div class="alert alert-success" role="status">
+            <i class="bi bi-check-circle"></i>
+            <div>
+                <?= htmlspecialchars($success_msg) ?>
+                <div class="mt-2"><a href="login.php" class="fw-semibold">Proceed to Log In <i class="bi bi-arrow-right"></i></a></div>
             </div>
         </div>
-    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($errors)): ?>
+        <div class="alert alert-danger" role="alert">
+            <i class="bi bi-exclamation-circle"></i>
+            <div>
+                <strong class="d-block mb-1">Please fix the following:</strong>
+                <ul>
+                    <?php foreach ($errors as $error): ?>
+                        <li><?= htmlspecialchars($error) ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+        </div>
+    <?php endif; ?>
+
+    <form action="register.php" method="POST" novalidate>
+        <?= csrf_field() ?>
+        <div class="row g-3 mb-3">
+            <div class="col-sm-4">
+                <label for="firstname" class="form-label">First Name</label>
+                <input type="text" class="form-control" id="firstname" name="firstname" value="<?= htmlspecialchars($firstname) ?>" autocomplete="given-name" maxlength="100" required>
+            </div>
+            <div class="col-sm-4">
+                <label for="middlename" class="form-label">Middle Name <span class="optional">Optional</span></label>
+                <input type="text" class="form-control" id="middlename" name="middlename" value="<?= htmlspecialchars($middlename) ?>" autocomplete="additional-name" maxlength="100">
+            </div>
+            <div class="col-sm-4">
+                <label for="lastname" class="form-label">Last Name</label>
+                <input type="text" class="form-control" id="lastname" name="lastname" value="<?= htmlspecialchars($lastname) ?>" autocomplete="family-name" maxlength="100" required>
+            </div>
+        </div>
+
+        <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+                <label for="username" class="form-label">Username</label>
+                <input type="text" class="form-control" id="username" name="username" value="<?= htmlspecialchars($username) ?>" autocomplete="username" maxlength="30" required aria-describedby="usernameHelp">
+                <div id="usernameHelp" class="form-text">3–30 letters, numbers or underscores.</div>
+            </div>
+            <div class="col-sm-6">
+                <label for="email" class="form-label">Email Address</label>
+                <input type="email" class="form-control" id="email" name="email" value="<?= htmlspecialchars($email) ?>" autocomplete="email" maxlength="150" required>
+            </div>
+        </div>
+
+        <div class="row g-3 mb-4">
+            <div class="col-sm-6">
+                <label for="password" class="form-label">Password</label>
+                <input type="password" class="form-control" id="password" name="password" autocomplete="new-password" minlength="8" required aria-describedby="passwordHelp">
+                <div id="passwordHelp" class="form-text">At least 8 characters.</div>
+            </div>
+            <div class="col-sm-6">
+                <label for="confirm_password" class="form-label">Confirm Password</label>
+                <input type="password" class="form-control" id="confirm_password" name="confirm_password" autocomplete="new-password" required>
+            </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-lg w-100">Register Account</button>
+    </form>
+
+    <p class="auth__switch">Already have an account? <a href="login.php" class="fw-semibold">Log in here</a></p>
 </div>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
